@@ -1,0 +1,125 @@
+# =============================================================================
+# Hefesto Studio — Hefesto Inmobiliaria: desarrollo
+# =============================================================================
+# PostgreSQL, Redis, API, interfaz y Caddy, en una sola red.
+#
+# En desarrollo se publican los puertos para trabajar sin Caddy; el proxy con
+# TLS solo aparece en `docker-compose.prod.yml`.
+#
+# Uso:
+#   docker compose -f deploy/docker-compose.dev.yml up --build
+#
+# VERSIONES FIJADAS
+# -----------------
+# PostgreSQL, Redis, PHP, Composer y Node van con version exacta. Una version
+# flotante hace que un despliegue que funcionaba ayer falle hoy sin que nadie
+# haya tocado nada. Ver docs/04.
+# =============================================================================
+
+name: inmobiliaria-dev
+
+x-api: &api
+  build:
+    context: ..
+    dockerfile: deploy/api/Dockerfile
+  env_file:
+    - ../api/.env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  volumes:
+    # El codigo se monta para no tener que reconstruir en cada cambio.
+    - ../api:/var/www/html
+    - storage:/var/www/html/storage
+    - bootstrap:/var/www/html/bootstrap/cache
+  ports:
+    - "8000:8000"
+
+services:
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL.
+  #
+  # DOS ROLES, Y NO UNO
+  # -------------------
+  # `POSTGRES_USER` es el rol de ARRANQUE: la imagen oficial ejecuta
+  # `initdb --username="$POSTGRES_USER"` y ese rol nace superusuario. Solo
+  # se usa para crear la base y para las tareas administrativas. La
+  # aplicacion NUNCA conecta con el.
+  #
+  # El rol de la aplicacion (`DB_USERNAME`) lo crea
+  # `deploy/postgres/inicializar-rol.sh` al inicializar el volumen, con
+  # NOSUPERUSER y NOBYPASSRLS explicitos. Le da la propiedad de la base
+  # para que las migraciones de Laravel puedan crear el esquema.
+  #
+  # POR QUE IMPORTA: la documentacion de PostgreSQL 18 dice que los
+  # superusuarios "always bypass the row security system", y que
+  # `FORCE ROW LEVEL SECURITY` sujeta solo al DUENO de la tabla, no al
+  # superusuario. Con un solo rol las politicas no se aplicarian y el
+  # aislamiento entre empresas seria decorativo. Ver docs/03.
+  # -------------------------------------------------------------------------
+  postgres:
+    image: "docker.io/library/postgres:18.6"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-inmobiliaria}
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-inmobiliaria_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?falta DB_ADMIN_PASSWORD en el .env}
+      # Rol con el que conecta la aplicacion. Lo crea el script de arranque.
+      APP_DB_ROLE: ${DB_USERNAME:-inmobiliaria}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en .env de la raiz}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-inmobiliaria} -d ${DB_DATABASE:-inmobiliaria}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: "docker.io/library/redis:8.8.3-alpine"
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "notice"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    <<: *api
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "true"
+      # En desarrollo el codigo cambia seguido: el opcache tiene que validar
+      # sellos de tiempo, o se ven cambios que ya no existen.
+      OP_CACHE_VALIDATE_TIMESTAMPS: "1"
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web/Dockerfile
+    environment:
+      NUXT_API_BASE: http://api:8000
+      NITRO_HOST: 0.0.0.0
+      NITRO_PORT: 3000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+    command: ["node", ".output/server/index.mjs"]
+
+volumes:
+  postgres:
+    name: inmobiliaria_postgres
+  redis:
+    name: inmobiliaria_redis
+  storage:
+    name: inmobiliaria_storage
+  bootstrap:
+    name: inmobiliaria_bootstrap

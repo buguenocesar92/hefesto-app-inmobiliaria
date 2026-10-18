@@ -1,0 +1,57 @@
+# =============================================================================
+# Hefesto Studio — Hefesto Inmobiliaria
+# =============================================================================
+# Caddy termina TLS y es el UNICO que expone puertos. La API y la interfaz no
+# publican ninguno en produccion: publicarlos entregaria la API sin cifrar.
+# =============================================================================
+
+{
+	email {$ACME_EMAIL}
+	# Los datos de los certificados viven en un volumen, no en el contenedor:
+	# si se pierden al recrear el contenedor, hay que volver a pedirlos y los
+	# limites de emision de Let's Encrypt pueden rechazarlo.
+}
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	# La interfaz se renderiza en el servidor. Se reenvian las cookies de sesion
+	# de la API, y por eso el navegador nunca ve un token.
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# La API responde en su propio prefijo.
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Cabeceras de seguridad. Son deliberadamente pocas y todas con motivo:
+	#
+	#   - `nosniff`: evita que el navegador interprete un archivo como otro tipo
+	#     del que es.
+	#   - `deny` en `frame-ancestors`: una interfaz de una inmobiliaria no tiene
+	#     que poder embeberse en un sitio de un tercero. Es el que evita el
+	#     clickjacking sobre los botones de "confirmar reserva".
+	#   - `strict-origin`: las peticiones se mandan solo al mismo origen.
+	#   - `noindex`: la aplicacion no es un sitio publico y no tiene por que
+	#     aparecer en un buscador.
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	# Nada de una sesion abierta se cachea en un proxy.
+	header {
+		Cache-Control "no-store"
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

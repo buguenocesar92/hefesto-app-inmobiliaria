@@ -1,0 +1,166 @@
+# =============================================================================
+# Hefesto Studio — Hefesto Inmobiliaria: produccion
+# =============================================================================
+# Diferencias con el archivo de desarrollo, y por que:
+#
+#   1. NO se publican puertos de la API ni de la interfaz. Todo entra por Caddy,
+#      que es el unico que tiene TLS. Publicar el puerto 8000 en una maquina con
+#      IP publica entrega la API sin cifrar.
+#   2. `APP_DEBUG=false` y `LOG_LEVEL=info`. El registro con nivel debug puede
+#      incluir el cuerpo de las peticiones, y en una inmobiliaria eso incluye
+#      clientes y operaciones.
+#   3. La API y la interfaz corren sin privilegios de root.
+#   4. Hay un servicio que corre las reglas automaticas cada hora, que es lo que
+#      libera las reservas vencidas.
+#
+# ANTES DE LEVANTAR
+# -----------------
+#   1. Configure Authentik con un cliente OIDC y el equipo de la inmobiliaria.
+#   2. Cambie las claves de ejemplo de DB_PASSWORD y de las demas variables.
+#   3. Corra `inmobiliaria:verificar-aislamiento` una vez: si el rol de la base
+#      puede saltarse la RLS, el aislamiento no existe.
+#
+# Ver docs/04 y docs/08.
+# =============================================================================
+
+name: inmobiliaria-prod
+
+x-api: &api
+  build:
+    context: ..
+    dockerfile: deploy/api/Dockerfile
+  restart: unless-stopped
+  env_file:
+    - ../api/.env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  volumes:
+    - storage:/var/www/html/storage
+    - bootstrap:/var/www/html/bootstrap/cache
+    - fotos:/var/www/html/storage/fotos
+
+services:
+
+  # -------------------------------------------------------------------------
+  # PostgreSQL.
+  #
+  # DOS ROLES, Y NO UNO
+  # -------------------
+  # `POSTGRES_USER` es el rol de ARRANQUE: la imagen oficial ejecuta
+  # `initdb --username="$POSTGRES_USER"` y ese rol nace superusuario. Solo
+  # se usa para crear la base y para las tareas administrativas. La
+  # aplicacion NUNCA conecta con el.
+  #
+  # El rol de la aplicacion (`DB_USERNAME`) lo crea
+  # `deploy/postgres/inicializar-rol.sh` al inicializar el volumen, con
+  # NOSUPERUSER y NOBYPASSRLS explicitos. Le da la propiedad de la base
+  # para que las migraciones de Laravel puedan crear el esquema.
+  #
+  # POR QUE IMPORTA: la documentacion de PostgreSQL 18 dice que los
+  # superusuarios "always bypass the row security system", y que
+  # `FORCE ROW LEVEL SECURITY` sujeta solo al DUENO de la tabla, no al
+  # superusuario. Con un solo rol las politicas no se aplicarian y el
+  # aislamiento entre empresas seria decorativo. Ver docs/03.
+  # -------------------------------------------------------------------------
+  postgres:
+    image: "docker.io/library/postgres:18.6"
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:?falta DB_DATABASE}
+      POSTGRES_USER: ${DB_ADMIN_USERNAME:-inmobiliaria_admin}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?falta DB_ADMIN_PASSWORD}
+      # Rol con el que conecta la aplicacion. Lo crea el script de arranque.
+      APP_DB_ROLE: ${DB_USERNAME:-inmobiliaria}
+      APP_DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres/inicializar-rol.sh:/docker-entrypoint-initdb.d/inicializar-rol.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-inmobiliaria} -d ${DB_DATABASE}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: "docker.io/library/redis:8.8.3-alpine"
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "notice"]
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    <<: *api
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      OP_CACHE_VALIDATE_TIMESTAMPS: "0"
+
+  # El planificador. Corre cada hora porque una reserva puede vencer a las once
+  # de la manana y la propiedad no tiene por que quedarse tomada hasta la
+  # medianoche.
+  planificador:
+    <<: *api
+    command: >
+      bash -c "while true; do
+        php artisan schedule:run --no-interaction;
+        sleep 3600;
+      done"
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+    depends_on:
+      - api
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      NUXT_API_BASE: http://api:8000
+      NITRO_HOST: 0.0.0.0
+      NITRO_PORT: 3000
+    depends_on:
+      - api
+    command: ["node", ".output/server/index.mjs"]
+
+  caddy:
+    image: "docker.io/library/caddy:2.10.2-alpine"
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    environment:
+      DOMINIO: ${DOMINIO:?falta DOMINIO en el .env de la raiz}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@hefesto.cl}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres:
+    name: inmobiliaria_postgres
+  redis:
+    name: inmobiliaria_redis
+  storage:
+    name: inmobiliaria_storage
+  bootstrap:
+    name: inmobiliaria_bootstrap
+  fotos:
+    name: inmobiliaria_fotos
+  caddy_data:
+    name: inmobiliaria_caddy_data
+  caddy_config:
+    name: inmobiliaria_caddy_config

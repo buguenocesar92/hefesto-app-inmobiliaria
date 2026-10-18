@@ -1,0 +1,26 @@
+<?php
+
+declare(strict_types=1);
+
+use Symfony\Component\Console\Input\ArgvInput;
+
+define('LARAVEL_START', microtime(true));
+
+/*
+|--------------------------------------------------------------------------
+| Registro de la aplicacion
+|--------------------------------------------------------------------------
+|
+| Este archivo reemplaza al que genera `composer create-project laravel/laravel`,
+| igual que bootstrap/app.php. Ver docs/04.
+|
+*/
+
+require __DIR__ . '/vendor/autoload.php';
+
+/** @var Illuminate\Foundation\Application $app */
+$app = require_once __DIR__ . '/bootstrap/app.php';
+
+$status = $app->handleCommand(new ArgvInput);
+
+exit($status);

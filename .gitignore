@@ -1,0 +1,71 @@
+# =============================================================================
+# Hefesto Studio — Hefesto Inmobiliaria
+# =============================================================================
+# Secretos y artefactos de build. Nada de lo que hay aca se versiona.
+# =============================================================================
+
+# --- Secretos -----------------------------------------------------------------
+# Los archivos de ejemplo (.env.example) SI se versionan; los reales no.
+.env
+.env.local
+.env.*.local
+api/.env
+web/.env
+
+*.pem
+*.key
+!deploy/**/*.pub.pem
+
+# --- Credenciales de Authentik ------------------------------------------------
+authentik/*.env
+authentik/*_admin_password.txt
+**/admin_password.txt
+
+# --- Dependencias -------------------------------------------------------------
+api/vendor/
+web/node_modules/
+
+# --- Build --------------------------------------------------------------------
+web/.nuxt/
+web/.output/
+web/dist/
+web/.data/
+api/bootstrap/cache/*.php
+!api/bootstrap/cache/.gitignore
+
+# --- Laravel ------------------------------------------------------------------
+api/storage/*.key
+api/storage/app/*
+api/storage/framework/cache/*
+api/storage/framework/sessions/*
+api/storage/framework/views/*
+api/storage/logs/*
+api/storage/fotos/*
+!api/storage/**/.gitignore
+api/.phpunit.cache/
+api/.phpunit.result.cache
+api/build/
+
+# --- Pruebas ------------------------------------------------------------------
+api/tests/Feature/_output/
+
+# --- Sistema operativo y editores ----------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+
+# --- Respaldos ----------------------------------------------------------------
+# Un respaldo dentro del repo es un respaldo que se versiona por error.
+respaldos/
+*.dump
+*.sql.gz
+*.tar.gz
+
+# --- Sistema ------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log*
